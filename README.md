@@ -6,6 +6,9 @@ It supports real-time search, advanced filtering, sorting, pagination, and stati
 The system is optimized for performance with server-side processing and MongoDB aggregation.
 Also included the stats for the total items sold only when Order status is Completed.
 
+**Live Application URL:**  
+https://sales-management-system-frontend-oyjy.onrender.com/
+
 ## 2. Tech Stack
 - Frontend: React (Vite), CSS
 - Backend: Node.js, Express.js
