@@ -13,7 +13,7 @@ app.use(express.json());
 connectDB();
 
 app.get("/", (req, res) => {
-  res.send("TruEstate Backend is Running");
+  res.send("Backend is Running");
 });
 
 app.use("/api/sales", salesRoutes);
