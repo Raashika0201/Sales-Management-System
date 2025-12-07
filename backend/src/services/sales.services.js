@@ -13,7 +13,53 @@ const fetchSales = async (queryParams) => {
   const query = buildQuery(queryParams);
   const sort = buildSort(sortBy);
   
-  const total = await Sale.countDocuments(query);
+  const convertRegexForAggregation = (obj) => {
+    if (obj === null || typeof obj !== 'object') return obj;
+    if (obj instanceof RegExp) {
+      return { $regex: obj.source, $options: obj.flags || 'i' };
+    }
+    if (Array.isArray(obj)) return obj.map(item => convertRegexForAggregation(item));
+    const converted = {};
+    for (const key in obj) {
+      if (obj.hasOwnProperty(key)) {
+        converted[key] = convertRegexForAggregation(obj[key]);
+      }
+    }
+    return converted;
+  };
+  
+  const aggregationQuery = convertRegexForAggregation(query);
+  
+  let total;
+  if (queryParams.searchField === "phoneNumber" && queryParams.search) {
+    const searchDigits = queryParams.search.replace(/\D/g, "");
+    const countPipeline = [
+      {
+        $addFields: {
+          phoneNumberStr: {
+            $cond: [
+              { $ne: [{ $type: "$Phone Number" }, "missing"] },
+              { $toString: { $ifNull: ["$Phone Number", ""] } },
+              ""
+            ]
+          }
+        }
+      },
+      {
+        $match: {
+          $or: [
+            { phoneNumberStr: { $regex: searchDigits, $options: "i" } },
+            { phoneNumber: { $regex: searchDigits, $options: "i" } }
+          ]
+        }
+      },
+      { $count: "total" }
+    ];
+    const countResult = await Sale.aggregate(countPipeline).allowDiskUse(true);
+    total = countResult.length > 0 ? countResult[0].total : 0;
+  } else {
+    total = await Sale.countDocuments(query);
+  }
   const totalPages = Math.ceil(total / limit) || 1;
   
   let validPage = Number(page);
@@ -25,12 +71,42 @@ const fetchSales = async (queryParams) => {
   let data = [];
   if (total > 0 && validPage >= 1 && validPage <= totalPages) {
     try {
-      const pipeline = [
-        { $match: query },
-        { $sort: sort },
-        { $skip: skip },
-        { $limit: Number(limit) }
-      ];
+      const isPhoneSearch = queryParams.searchField === "phoneNumber" && queryParams.search;
+      
+      let pipeline;
+      
+      if (isPhoneSearch) {
+        const searchDigits = queryParams.search.replace(/\D/g, "");
+        pipeline = [
+          {
+            $addFields: {
+              phoneNumberStr: {
+                $cond: [
+                  { $ne: [{ $type: "$Phone Number" }, "missing"] },
+                  { $toString: { $ifNull: ["$Phone Number", ""] } },
+                  ""
+                ]
+              }
+            }
+          },
+          {
+            $match: {
+              phoneNumberStr: { $regex: searchDigits, $options: "i" }
+            }
+          },
+          { $sort: sort },
+          { $skip: skip },
+          { $limit: Number(limit) },
+          { $project: { phoneNumberStr: 0 } } 
+        ];
+      } else {
+        pipeline = [
+          { $match: aggregationQuery },
+          { $sort: sort },
+          { $skip: skip },
+          { $limit: Number(limit) }
+        ];
+      }
       
       data = await Sale.aggregate(pipeline).allowDiskUse(true);
     } catch (err) {
@@ -90,43 +166,100 @@ const fetchSales = async (queryParams) => {
   }
   
   
-  try {
-    const testCount = await Sale.countDocuments(finalStatsQuery);
-  } catch (testErr) {
-    console.error("Error testing stats query:", testErr.message);
-  }
   
-  const statsPipeline = [
-    { $match: finalStatsQuery },
-    {
-      $addFields: {
-        qty: { $ifNull: ["$quantity", "$Quantity"] },
-        total: { $ifNull: ["$totalAmount", "$Total Amount"] },
-        final: { $ifNull: ["$finalAmount", "$Final Amount"] }
-      }
-    },
-    {
-      $group: {
-        _id: null,
-        totalUnitsSold: { $sum: { $ifNull: ["$qty", 0] } },
-        totalAmount: { $sum: { $ifNull: ["$total", 0] } },
-        totalDiscount: {
-          $sum: {
+  const finalStatsAggregationQuery = convertRegexForAggregation(finalStatsQuery);
+  
+  const isPhoneSearchForStats = queryParams.searchField === "phoneNumber" && queryParams.search;
+  
+  let statsPipeline;
+  
+  if (isPhoneSearchForStats) {
+    const searchDigits = queryParams.search.replace(/\D/g, "");
+    statsPipeline = [
+      {
+        $addFields: {
+          phoneNumberStr: {
             $cond: [
-              {
-                $and: [
-                  { $ne: ["$total", null] },
-                  { $ne: ["$final", null] }
-                ]
-              },
-              { $subtract: ["$total", "$final"] },
-              0
+              { $ne: [{ $type: "$Phone Number" }, "missing"] },
+              { $toString: { $ifNull: ["$Phone Number", ""] } },
+              ""
             ]
+          },
+          orderStatusField: {
+            $ifNull: ["$orderStatus", "$Order Status"]
           }
+        }
+      },
+      {
+        $match: {
+          $and: [
+            { phoneNumberStr: { $regex: searchDigits, $options: "i" } },
+            { orderStatusField: "Completed" }
+          ]
+        }
+      },
+      {
+        $addFields: {
+          qty: { $ifNull: ["$quantity", "$Quantity"] },
+          total: { $ifNull: ["$totalAmount", "$Total Amount"] },
+          final: { $ifNull: ["$finalAmount", "$Final Amount"] }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalUnitsSold: { $sum: { $ifNull: ["$qty", 0] } },
+          totalAmount: { $sum: { $ifNull: ["$total", 0] } },
+          totalDiscount: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ["$total", null] },
+                    { $ne: ["$final", null] }
+                  ]
+                },
+                { $subtract: ["$total", "$final"] },
+                0
+              ]
+            }
+          },
         },
       },
-    },
-  ];
+    ];
+  } else {
+    statsPipeline = [
+      { $match: finalStatsAggregationQuery },
+      {
+        $addFields: {
+          qty: { $ifNull: ["$quantity", "$Quantity"] },
+          total: { $ifNull: ["$totalAmount", "$Total Amount"] },
+          final: { $ifNull: ["$finalAmount", "$Final Amount"] }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalUnitsSold: { $sum: { $ifNull: ["$qty", 0] } },
+          totalAmount: { $sum: { $ifNull: ["$total", 0] } },
+          totalDiscount: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ["$total", null] },
+                    { $ne: ["$final", null] }
+                  ]
+                },
+                { $subtract: ["$total", "$final"] },
+                0
+              ]
+            }
+          },
+        },
+      },
+    ];
+  }
 
   let stats = {
     totalUnitsSold: 0,
@@ -143,8 +276,6 @@ const fetchSales = async (queryParams) => {
         totalAmount: statsResult[0].totalAmount || 0,
         totalDiscount: statsResult[0].totalDiscount || 0,
       };
-    } else {
-      const matchCount = await Sale.countDocuments(finalStatsQuery);
     }
   } catch (err) {
     console.error("Error calculating stats:", err.message); 

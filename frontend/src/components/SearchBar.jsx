@@ -9,7 +9,6 @@ const SearchBar = ({ setParams }) => {
     { value: "customerId", label: "Customer ID" },
     { value: "customerName", label: "Customer Name" },
     { value: "phoneNumber", label: "Phone Number" },
-    { value: "gender", label: "Gender" },
     { value: "age", label: "Age" },
     { value: "productCategory", label: "Product Category" },
     { value: "quantity", label: "Quantity" },

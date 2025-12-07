@@ -47,17 +47,19 @@ const buildQuery = (params) => {
         const { dbFields, isNumeric, isPhone } = fieldInfo;
 
         if (isPhone) {
-          const normalizedSearch = searchTerm.replace(/[\s\-+().]/g, "");
-          const escapedSearch = normalizedSearch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          
-          const phoneRegex = new RegExp(escapedSearch, "i");
-          
-          const originalRegex = new RegExp(searchTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+          const digitsOnly = searchTerm.replace(/\D/g, "");
           
           const phoneConditions = [];
+          
           dbFields.forEach(field => {
-            phoneConditions.push({ [field]: phoneRegex });
-            phoneConditions.push({ [field]: originalRegex });
+            if (digitsOnly.length > 0) {
+              phoneConditions.push({ [field]: new RegExp(digitsOnly, "i") });
+            }
+            
+            const escapedOriginal = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            if (escapedOriginal !== digitsOnly) {
+              phoneConditions.push({ [field]: new RegExp(escapedOriginal, "i") });
+            }
           });
           
           if (query.$or) {
@@ -65,6 +67,8 @@ const buildQuery = (params) => {
             delete query.$or;
             query.$and = query.$and || [];
             query.$and.push({ $or: existingOr });
+            query.$and.push({ $or: phoneConditions });
+          } else if (query.$and) {
             query.$and.push({ $or: phoneConditions });
           } else {
             query.$or = phoneConditions;
